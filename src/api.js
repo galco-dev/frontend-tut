@@ -113,6 +113,30 @@ export const api = {
   delete: (path) => request("DELETE", path),
 };
 
+function analyticsPath(path, params) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+  const search = query.toString();
+  return search ? `${path}?${search}` : path;
+}
+
+async function analyticsRequest(path) {
+  try {
+    return await api.get(path);
+  } catch (cause) {
+    if (cause && cause.sessionExpired) throw cause;
+    const error = new Error(cause?.message || "Analytics data is unavailable");
+    error.name = "AnalyticsUnavailableError";
+    error.analyticsUnavailable = true;
+    error.cause = cause;
+    throw error;
+  }
+}
+
 // ── Auth ──
 export const auth = {
   login: (email, password) =>
@@ -128,6 +152,10 @@ export const users = {
   changePassword: (current_password, new_password, confirm_password) => api.post("/users/me/change-password", { current_password, new_password, confirm_password }),
   referrals: () => api.get("/users/me/referrals"),
   referralList: () => api.get("/users/me/referrals/list"),
+  analytics: (options = {}) => analyticsRequest(analyticsPath("/users/me/analytics", {
+    range: options.range,
+    timezone: options.timezone,
+  })),
 };
 
 // ── Subscriptions ──
@@ -172,6 +200,12 @@ export const support = {
 export const admin = {
   users: (limit=200) => api.get("/admin/users?limit="+limit),
   dashboard: () => api.get("/admin/dashboard"),
+  analytics: (options = {}) => analyticsRequest(analyticsPath("/admin/analytics", {
+    range: options.range,
+    bucket: options.bucket,
+    timezone: options.timezone,
+    top_limit: options.topLimit,
+  })),
   updateRole: (userId, role) => api.patch("/admin/users/"+userId+"/role", { role }),
   payouts: (limit=200) => api.get("/admin/payouts?limit="+limit),
   triggerPayouts: () => api.post("/admin/payouts/trigger"),

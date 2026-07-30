@@ -4,7 +4,8 @@ import { admin as adminApi, courses as coursesApi } from "../../api";
 import { LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { useIsMobile, Ico, Badge, StatCard, GlowRow } from "../../components/UI";
 import { Btn, Logo } from "../../components/Layout";
-import { INIT_PAYOUTS, adminUsers, PRICE, GROWTH_DATA, CHURN_DATA, MONTHLY_PAYOUTS, NETWORK_PIE, USER } from "../../constants";
+import { GROWTH_DATA, CHURN_DATA } from "../../constants";
+import { buildAdminAnalyticsViewModel } from "../../analytics/adminDashboard";
 import CreateAdminForm from "../../components/admin/CreateAdminForm";
 import AdminTicketsTab from "../../components/admin/AdminTicketsTab";
 import CreateUserForm from "../../components/CreateUserForm";
@@ -53,6 +54,7 @@ function AdminPanel(props) {
   var _adminUsers = useState([]); var adminUsers = _adminUsers[0]; var setAdminUsers = _adminUsers[1];
   var _adminStats = useState(null); var adminStats = _adminStats[0]; var setAdminStats = _adminStats[1];
   var _adminLoading = useState(true); var adminLoading = _adminLoading[0]; var setAdminLoading = _adminLoading[1];
+  var _adminAnalytics = useState(null); var adminAnalytics = _adminAnalytics[0]; var setAdminAnalytics = _adminAnalytics[1];
   var { user: adminAuthUser } = useAuth();
 
   useEffect(function(){
@@ -62,6 +64,7 @@ function AdminPanel(props) {
       adminApi.dashboard(),
       adminApi.payouts(),
       coursesApi.list(),
+      adminApi.analytics({range:"12m", bucket:"month", timezone:"Asia/Dubai", topLimit:10}),
     ]).then(function(results){
       if(results[0].status==="fulfilled" && Array.isArray(results[0].value)){
         setAdminUsers(results[0].value.map(function(u){
@@ -81,12 +84,18 @@ function AdminPanel(props) {
           return { id:c.id, module:c.title, icon:c.category||"book", lessons:[] };
         }));
       }
+      if(results[4].status==="fulfilled"){
+        setAdminAnalytics(results[4].value);
+      }
       setAdminLoading(false);
     });
   }, [adminAuthUser]);
 
-  var active = adminUsers.filter(function(u){return u.status==="active"}).length;
-  var mrr = adminStats ? adminStats.total_revenue_aed : active * PRICE;
+  var analyticsView = buildAdminAnalyticsViewModel(adminAnalytics);
+  var financialSeries = analyticsView.financialSeries;
+  var payoutSeries = analyticsView.payoutSeries;
+  var referralSegments = analyticsView.referralSegments;
+  var topReferrers = analyticsView.topReferrers;
   var totalLessons = courses.reduce(function(s,c){return s+c.lessons.length},0);
   function isProcessablePayout(p) { return p && p.status === "requested"; }
   function payoutAmount(p) { return Number((p && p.amount) || 0); }
@@ -399,7 +408,7 @@ function AdminPanel(props) {
                 <span style={{ fontSize:mob?9:10, color:"#64748b", padding:"3px 10px", borderRadius:5, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.05)", whiteSpace:mob?"nowrap":"normal", overflow:"hidden", textOverflow:"ellipsis", maxWidth:mob?120:"none" }}>Where the money goes</span>
               </div>
               <ResponsiveContainer width="100%" height={220}>
-                <AreaChart data={GROWTH_DATA} margin={{top:5,right:5,left:mob?-25:-15,bottom:5}}>
+                <AreaChart data={financialSeries} margin={{top:5,right:5,left:mob?-25:-15,bottom:5}}>
                   <defs>
                     <linearGradient id="gRev" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="rgb(0,228,193)" stopOpacity={0.4}/>
@@ -466,7 +475,7 @@ function AdminPanel(props) {
                 <span style={{ fontSize:9, color:"#64748b", padding:"2px 8px", borderRadius:4, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.05)" }}>Monthly disbursed</span>
               </div>
               <ResponsiveContainer width="100%" height={160}>
-                <BarChart data={MONTHLY_PAYOUTS} margin={{top:5,right:5,left:mob?-25:-15,bottom:5}}>
+                <BarChart data={payoutSeries} margin={{top:5,right:5,left:mob?-25:-15,bottom:5}}>
                   <CartesianGrid strokeDasharray="4 6" stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
                   <XAxis dataKey="month" tick={{fill:"#64748b",fontSize:10}} />
                   <YAxis tick={{fill:"#64748b",fontSize:10}} tickFormatter={function(v){return "AED "+v}} />
@@ -485,14 +494,14 @@ function AdminPanel(props) {
               <div style={{ display:"flex", flexDirection:mob?"column":"row", alignItems:"center", gap:mob?8:0 }}>
                 <ResponsiveContainer width={mob?"100%":"50%"} height={mob?130:180}>
                   <PieChart>
-                    <Pie data={NETWORK_PIE} cx="50%" cy="50%" innerRadius={mob?25:45} outerRadius={mob?48:75} paddingAngle={3} dataKey="value">
-                      {NETWORK_PIE.map(function(entry,i){return <Cell key={i} fill={entry.color} />})}
+                    <Pie data={referralSegments} cx="50%" cy="50%" innerRadius={mob?25:45} outerRadius={mob?48:75} paddingAngle={3} dataKey="value">
+                      {referralSegments.map(function(entry,i){return <Cell key={i} fill={entry.color} />})}
                     </Pie>
                     <Tooltip contentStyle={{background:"rgba(10,10,12,0.95)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,fontSize:11,color:"#ffffff",boxShadow:"0 8px 32px rgba(0,0,0,0.4)",padding:"8px 12px"}} itemStyle={{color:"#ffffff"}} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div style={{ display:"flex", flexDirection:mob?"row":"column", gap:mob?6:8, flexWrap:"wrap", justifyContent:mob?"center":"flex-start" }}>
-                  {NETWORK_PIE.map(function(item){ return (
+                  {referralSegments.map(function(item){ return (
                     <div key={item.name} style={{ display:"flex", alignItems:"center", gap:4, padding:mob?"3px 6px":"4px 10px", borderRadius:6, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.05)" }}>
                       <div style={{ width:8, height:8, borderRadius:"50%", background:item.color, flexShrink:0 }} />
                       <span style={{ fontSize:mob?9:10, color:"#64748b" }}>{item.name}</span>
@@ -512,15 +521,15 @@ function AdminPanel(props) {
               <div style={{ width:"100%" }}>
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead><tr>{(mob?["#","Name","L1","L2","Tot","Earned"]:["#","Name","Level 1","Level 2","Total","Earned","Status"]).map(function(h){return <th key={h} style={{ padding:mob?"6px 5px":"8px 8px", fontSize:9, fontWeight:700, textTransform:"uppercase", letterSpacing:0.5, color:"#94a3b8", textAlign:"left", verticalAlign:"middle", borderBottom:"1px solid rgba(255,255,255,0.06)", whiteSpace:"nowrap" }}>{h}</th>})}</tr></thead>
-                <tbody>{[...adminUsers].sort(function(a,b){return (b.l1+b.l2)-(a.l1+a.l2)}).slice(0,10).map(function(r,i){ return (
-                  <tr key={r.name+i} style={{ borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
+                <tbody>{topReferrers.map(function(r,i){ return (
+                  <tr key={r.id} style={{ borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
                     <td style={{ padding:mob?"7px 5px":"10px 8px", verticalAlign:"middle" }}>
                       <div style={{ width:mob?18:22, height:mob?18:22, borderRadius:"50%", background:i===0?"#00e4c1":i===1?"#9ca3af":i===2?"#b45309":"rgba(255,255,255,0.06)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:mob?8:10, fontWeight:700, color:i<3?"#000000":"#9ca3af" }}>{i+1}</div>
                     </td>
                     <td style={{ padding:mob?"7px 5px":"10px 8px", fontSize:mob?11:12, fontWeight:600, color:"#ffffff", verticalAlign:"middle", whiteSpace:"nowrap" }}>{r.name}</td>
                     <td style={{ padding:mob?"7px 5px":"10px 8px", fontSize:mob?11:12, color:"#ffffff", fontWeight:600, verticalAlign:"middle" }}>{r.l1}</td>
                     <td style={{ padding:mob?"7px 5px":"10px 8px", fontSize:mob?11:12, color:"#8b5cf6", fontWeight:600, verticalAlign:"middle" }}>{r.l2}</td>
-                    <td style={{ padding:mob?"7px 5px":"10px 8px", fontSize:mob?12:13, fontWeight:700, color:"#fff", verticalAlign:"middle" }}>{r.l1+r.l2}</td>
+                    <td style={{ padding:mob?"7px 5px":"10px 8px", fontSize:mob?12:13, fontWeight:700, color:"#fff", verticalAlign:"middle" }}>{r.total}</td>
                     <td style={{ padding:mob?"7px 5px":"10px 8px", fontSize:mob?11:12, fontWeight:500, color:"#ffffff", verticalAlign:"middle", whiteSpace:"nowrap" }}>{"AED "+(r.earned||0).toFixed(2)}</td>
                     {!mob && <td style={{ padding:"10px 8px", verticalAlign:"middle" }}>
                       <div style={{ display:"flex", alignItems:"center", gap:6 }}>

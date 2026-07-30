@@ -6,6 +6,7 @@ import { useIsMobile, Ico, Badge, StatCard, FadeIn, Skeleton, DashSkeleton, Prog
 import { Btn, Logo } from "../components/Layout";
 import { PRICE, L1_RATE, L2_RATE, INIT_COURSES, USER } from "../constants";
 import SettingsTab from "../components/SettingsTab";
+import { buildUserAnalyticsViewModel, selectLatestEarningsPeriods } from "../analytics/userDashboard";
 
 function subscriptionHasAccess(sub) {
   if (!sub) return false;
@@ -92,6 +93,7 @@ function UserPortal(props) {
   var _myCommissions = useState([]); var myCommissions = _myCommissions[0]; var setMyCommissions = _myCommissions[1];
   var _myPayouts = useState([]); var myPayouts = _myPayouts[0]; var setMyPayouts = _myPayouts[1];
   var _mySub = useState(null); var mySub = _mySub[0]; var setMySub = _mySub[1];
+  var _userAnalytics = useState(null); var userAnalytics = _userAnalytics[0]; var setUserAnalytics = _userAnalytics[1];
 
   useEffect(function(){
     Promise.allSettled([
@@ -102,6 +104,7 @@ function UserPortal(props) {
       subscriptionsApi.me(),
       coursesApi.list(),
       usersApi.referralList(),
+      usersApi.analytics({ range:"all", timezone:"Asia/Dubai" }),
     ]).then(function(results){
       // If /users/me 403s, session is dead — redirect to login
       if(results[0].status==="rejected" && results[0].reason && results[0].reason.message === "Session expired") {
@@ -118,6 +121,9 @@ function UserPortal(props) {
         console.error("Failed to load courses:", results[5].reason && results[5].reason.message ? results[5].reason.message : results[5].reason);
       }
       if(results[6].status==="fulfilled") setReferralList(results[6].value);
+      if(results[7].status==="fulfilled") {
+        setUserAnalytics(results[7].value);
+      }
       // If /users/me failed, user is not logged in — redirect to login
       if(results[0].status==="rejected") {
         go("login");
@@ -161,24 +167,9 @@ function UserPortal(props) {
       pending: parseFloat(myCommissions.filter(function(c){return c.status==="pending"}).reduce(function(s,c){return s+(c.amount_aed||0)},0).toFixed(2)),
       paid: parseFloat(myPayouts.filter(function(p){return p.status==="completed"}).reduce(function(s,p){return s+(p.amount_aed||0)},0).toFixed(2)),
     },
-    l1: referralList && Array.isArray(referralList.level1) ? referralList.level1.map(function(r){ return { name:r.name||r.email, status:r.subscription_status||"inactive", date: r.joined_at ? new Date(r.joined_at).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "", earned: r.commission_earned||0 }; }) : [],
-    l2: referralList && Array.isArray(referralList.level2) ? referralList.level2.map(function(r){ return { name:r.name||r.email, from:r.referred_by_name||"", date: r.joined_at ? new Date(r.joined_at).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "", earned: r.commission_earned||0 }; }) : [],
-    payouts: myPayouts.map(function(p){ return { date: p.created_at ? new Date(p.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "", amount: p.amount_aed||0, status: p.status||"pending", ref: p.id||"" }; }),
-    earningsHistory: (function(){
-      // Build weekly earnings history from commissions
-      var weeks = {};
-      (myCommissions||[]).forEach(function(c){
-        var d = new Date(c.created_at);
-        // Get week start (Monday)
-        var day = d.getDay(); var diff = (day===0?-6:1-day);
-        var mon = new Date(d); mon.setDate(d.getDate()+diff);
-        var key = mon.toLocaleDateString("en-US",{month:"short",day:"numeric"});
-        if (!weeks[key]) weeks[key] = {week:key, l1:0, l2:0, net:0};
-        if (c.level===1) weeks[key].l1 += c.amount_aed||0;
-        if (c.level===2) weeks[key].l2 += c.amount_aed||0;
-      });
-      return Object.values(weeks).map(function(w){ w.net=parseFloat((w.l1+w.l2).toFixed(2)); w.l1=parseFloat(w.l1.toFixed(2)); w.l2=parseFloat(w.l2.toFixed(2)); return w; });
-    })(),
+    l1: referralList && Array.isArray(referralList.level1) ? referralList.level1.map(function(r){ return { name:r.name||r.email, status:r.subscription_status||"inactive", date: r.joined_at ? new Date(r.joined_at).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "", joinedAt:r.joined_at||null, earned:r.commission_earned||0 }; }) : [],
+    l2: referralList && Array.isArray(referralList.level2) ? referralList.level2.map(function(r){ return { name:r.name||r.email, from:r.referred_by_name||"", date: r.joined_at ? new Date(r.joined_at).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "", joinedAt:r.joined_at||null, earned:r.commission_earned||0 }; }) : [],
+    payouts: myPayouts.map(function(p){ return { date: p.created_at ? new Date(p.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "", createdAt:p.created_at||null, paidAt:p.paid_at||null, amount:p.amount_aed||0, status:p.status||"pending", ref:p.id||"" }; }),
   } : {
     name: authUser ? (authUser.full_name || authUser.email) : "Loading...",
     email: authUser ? authUser.email : "",
@@ -186,8 +177,28 @@ function UserPortal(props) {
     status: "inactive", billingStatus: "inactive", plan: "Tutorii Monthly", paymentMethod: "MamoPay",
     joined: "", lastLogin: "", nextBilling: "N/A", billingDateLabel: "Next Billing Date", referredBy: "Direct",
     iban: "", ibanName: "", billing: [], earn: { total:0, month:0, pending:0, paid:0 },
-    l1: [], l2: [], payouts: [], earningsHistory: [],
+    l1: [], l2: [], payouts: [],
   };
+
+  var analyticsView = buildUserAnalyticsViewModel({
+    analytics: userAnalytics,
+    referralList: referralList,
+    payouts: myPayouts,
+  });
+  var financialSummary = analyticsView.financialSummary;
+  var projection = analyticsView.projection;
+  var displayedEarnings = userAnalytics ? {
+    total: financialSummary.lifetime_commissions_aed,
+    month: financialSummary.current_month_commissions_aed,
+    pending: financialSummary.available_for_payout_aed,
+    paid: financialSummary.completed_payouts_aed,
+  } : u.earn;
+  var minimumPayoutAed = userAnalytics ? analyticsView.minimumPayoutAed : 0;
+  var requestMinimumPayoutAed = minimumPayoutAed || 50;
+  var availableForPayoutAed = parseFloat(displayedEarnings.pending || 0);
+  var networkActiveL1 = analyticsView.networkBreakdown[0].value;
+  var networkCancelledL1 = analyticsView.networkBreakdown[1].value;
+  var selectedEarningsSeries = selectLatestEarningsPeriods(analyticsView.earningsSeries, chartRange);
 
   var mob = useIsMobile();
   function PayoutStatusBadge(props) {
@@ -468,9 +479,9 @@ function UserPortal(props) {
         {tab === "overview" && <div>
           <h2 style={{ fontSize:22, fontWeight:700, margin:"0 0 20px", color:"#ffffff" }}>{"Welcome back, " + (u.name||"there").split(" ")[0]}</h2>
           <div style={{ display:"grid", gridTemplateColumns:mob?"1fr 1fr":"repeat(4, 1fr)", gap:mob?10:14, marginBottom:mob?16:24, alignItems:"stretch" }}>
-            <StatCard icon="dollar" label="Total Earnings" value={"AED "+u.earn.total} />
-            <StatCard icon="chart" label="This Month's Earnings" value={"AED "+u.earn.month} />
-            <StatCard icon="users" label="My Referrals" value={(u.l1||[]).length} sub={activeL1+" active"} />
+            <StatCard icon="dollar" label="Total Earnings" value={"AED "+displayedEarnings.total} />
+            <StatCard icon="chart" label="This Month's Earnings" value={"AED "+displayedEarnings.month} />
+            <StatCard icon="users" label="My Referrals" value={(u.l1||[]).length} sub={networkActiveL1+" active"} />
             <StatCard icon="book" label="Course Progress" value={pct+"%"} sub={doneL+"/"+totalL+" lessons"} color="#00e4c1" />
           </div>
           <div style={{ display:"grid", gridTemplateColumns:mob?"1fr":"1fr 1fr", gap:14, alignItems:"stretch" }}>
@@ -526,7 +537,7 @@ function UserPortal(props) {
                   </div>
                   <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#64748b" }}>
                     <span style={{ padding:"2px 8px", borderRadius:5, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.05)" }}>Pending Balance</span>
-                    <span style={{ padding:"2px 8px", borderRadius:5, background:parseFloat(u.earn.pending||0) >= 10 ? "rgba(0,228,193,0.08)" : "rgba(248,113,113,0.08)", border:"1px solid "+(parseFloat(u.earn.pending||0) >= 10 ? "rgba(0,228,193,0.12)" : "rgba(248,113,113,0.12)"), color: parseFloat(u.earn.pending||0) >= 10 ? "rgb(0,228,193)" : "#f87171", fontWeight:600 }}>{"AED "+parseFloat(u.earn.pending||0).toFixed(2)}{parseFloat(u.earn.pending||0) >= 10 ? " \u2713" : " (min AED 50)"}</span>
+                    <span style={{ padding:"2px 8px", borderRadius:5, background:availableForPayoutAed >= requestMinimumPayoutAed ? "rgba(0,228,193,0.08)" : "rgba(248,113,113,0.08)", border:"1px solid "+(availableForPayoutAed >= requestMinimumPayoutAed ? "rgba(0,228,193,0.12)" : "rgba(248,113,113,0.12)"), color:availableForPayoutAed >= requestMinimumPayoutAed ? "rgb(0,228,193)" : "#f87171", fontWeight:600 }}>{"AED "+availableForPayoutAed.toFixed(2)+(availableForPayoutAed >= requestMinimumPayoutAed ? " ✓" : " (min AED "+requestMinimumPayoutAed.toFixed(0)+")")}</span>
                   </div>
                 </div>
               );
@@ -539,11 +550,10 @@ function UserPortal(props) {
                 <div style={{ width:28, height:28, borderRadius:7, background:"rgba(0,228,193,0.08)", border:"1px solid rgba(0,228,193,0.12)", display:"flex", alignItems:"center", justifyContent:"center", lineHeight:0 }}><Ico name="target" size={13} color="rgb(0,228,193)" /></div>
               </div>
               {(function(){
-                var monthlyGross = activeL1 * PRICE * L1_RATE + (u.l2||[]).length * PRICE * L2_RATE;
-                var monthlyNet = monthlyGross - PRICE;
-                var roiPct = monthlyGross > 0 ? Math.round((monthlyNet / monthlyGross) * 100) : 0;
+                var monthlyGross = projection.projected_monthly_commissions_aed;
+                var monthlyNet = projection.projected_monthly_after_subscription_aed;
                 var r = 44; var circ = 2 * Math.PI * r;
-                var earnPct = monthlyGross > 0 ? Math.min((monthlyGross / (monthlyGross + PRICE)) * 100, 100) : 0;
+                var earnPct = monthlyGross > 0 ? Math.min((monthlyGross / (monthlyGross + projection.subscription_price_aed)) * 100, 100) : 0;
                 var offset = circ - (earnPct / 100) * circ;
                 return (
                   <div style={{ display:"flex", alignItems:"center", gap:16 }}>
@@ -560,7 +570,7 @@ function UserPortal(props) {
                       </div>
                       <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:8 }}>
                         <div style={{ width:8, height:8, borderRadius:2, background:"rgba(248,113,113,0.4)" }} />
-                        <span style={{ fontSize:10, color:"#94a3b8", padding:"2px 8px", borderRadius:5, background:"rgba(248,113,113,0.05)", border:"1px solid rgba(248,113,113,0.1)" }}>{"Subscription -AED "+PRICE}</span>
+                        <span style={{ fontSize:10, color:"#94a3b8", padding:"2px 8px", borderRadius:5, background:"rgba(248,113,113,0.05)", border:"1px solid rgba(248,113,113,0.1)" }}>{"Subscription -AED "+projection.subscription_price_aed.toFixed(2)}</span>
                       </div>
                       <div style={{ display:"inline-block", fontSize:13, fontWeight:600, color:monthlyNet>=0?"rgb(0,228,193)":"#f87171", padding:"4px 12px", borderRadius:8, background:monthlyNet>=0?"rgba(0,228,193,0.08)":"rgba(248,113,113,0.08)", border:"1px solid "+(monthlyNet>=0?"rgba(255,255,255,0.08)":"rgba(248,113,113,0.15)"), marginTop:4 }}>{"Net Profit AED "+monthlyNet.toFixed(2)}</div>
                     </div>
@@ -576,8 +586,7 @@ function UserPortal(props) {
                 <div style={{ width:28, height:28, borderRadius:7, background:"rgba(0,228,193,0.08)", border:"1px solid rgba(0,228,193,0.12)", display:"flex", alignItems:"center", justifyContent:"center", lineHeight:0 }}><Ico name="users" size={13} color="rgb(0,228,193)" /></div>
               </div>
               {(function(){
-                var l1cancelled = (u.l1||[]).filter(function(r){return r.status==="cancelled"}).length;
-                var retPct = (u.l1||[]).length > 0 ? Math.round((activeL1 / (u.l1||[]).length) * 100) : 0;
+                var retPct = (u.l1||[]).length > 0 ? Math.round((networkActiveL1 / (u.l1||[]).length) * 100) : 0;
                 return (
                   <div>
                     <div style={{ marginBottom:14 }}>
@@ -586,12 +595,12 @@ function UserPortal(props) {
                         <span style={{ color:retPct>=70?"rgb(0,228,193)":"#00e4c1", fontWeight:600, fontSize:10, padding:"2px 8px", borderRadius:5, background:retPct>=70?"rgba(0,228,193,0.08)":"rgba(0,228,193,0.08)", border:"1px solid "+(retPct>=70?"rgba(0,228,193,0.12)":"rgba(0,228,193,0.12)") }}>{retPct+"%"}</span>
                       </div>
                       <div style={{ width:"100%", height:8, borderRadius:4, background:"rgba(255,255,255,0.06)", overflow:"hidden", display:"flex" }}>
-                        <div style={{ height:8, background:"linear-gradient(90deg, rgba(0,228,193,0.7), rgb(0,228,193))", width:(activeL1/Math.max((u.l1||[]).length,1)*100)+"%", borderRadius:"4px 0 0 4px", boxShadow:"0 0 6px rgba(0,228,193,0.2)", transition:"width 0.5s" }} />
-                        <div style={{ height:8, background:"rgba(248,113,113,0.3)", width:(l1cancelled/Math.max((u.l1||[]).length,1)*100)+"%", borderRadius:"0 4px 4px 0" }} />
+                        <div style={{ height:8, background:"linear-gradient(90deg, rgba(0,228,193,0.7), rgb(0,228,193))", width:(networkActiveL1/Math.max((u.l1||[]).length,1)*100)+"%", borderRadius:"4px 0 0 4px", boxShadow:"0 0 6px rgba(0,228,193,0.2)", transition:"width 0.5s" }} />
+                        <div style={{ height:8, background:"rgba(248,113,113,0.3)", width:(networkCancelledL1/Math.max((u.l1||[]).length,1)*100)+"%", borderRadius:"0 4px 4px 0" }} />
                       </div>
                       <div style={{ display:"flex", justifyContent:"space-between", marginTop:4 }}>
-                        <div style={{ display:"flex", alignItems:"center", gap:4 }}><div style={{ width:6, height:6, borderRadius:1, background:"rgb(0,228,193)" }} /><span style={{ fontSize:9, color:"#64748b", padding:"1px 6px", borderRadius:4, background:"rgba(0,228,193,0.06)", border:"1px solid rgba(0,228,193,0.08)" }}>{activeL1+" active"}</span></div>
-                        <div style={{ display:"flex", alignItems:"center", gap:4 }}><div style={{ width:6, height:6, borderRadius:1, background:"rgba(248,113,113,0.4)" }} /><span style={{ fontSize:9, color:"#64748b", padding:"1px 6px", borderRadius:4, background:"rgba(248,113,113,0.05)", border:"1px solid rgba(248,113,113,0.08)" }}>{l1cancelled+" cancelled"}</span></div>
+                        <div style={{ display:"flex", alignItems:"center", gap:4 }}><div style={{ width:6, height:6, borderRadius:1, background:"rgb(0,228,193)" }} /><span style={{ fontSize:9, color:"#64748b", padding:"1px 6px", borderRadius:4, background:"rgba(0,228,193,0.06)", border:"1px solid rgba(0,228,193,0.08)" }}>{networkActiveL1+" active"}</span></div>
+                        <div style={{ display:"flex", alignItems:"center", gap:4 }}><div style={{ width:6, height:6, borderRadius:1, background:"rgba(248,113,113,0.4)" }} /><span style={{ fontSize:9, color:"#64748b", padding:"1px 6px", borderRadius:4, background:"rgba(248,113,113,0.05)", border:"1px solid rgba(248,113,113,0.08)" }}>{networkCancelledL1+" cancelled"}</span></div>
                       </div>
                     </div>
                     <div style={{ borderTop:"1px solid rgba(255,255,255,0.04)", paddingTop:12 }}>
@@ -618,7 +627,7 @@ function UserPortal(props) {
 
           {/* Network summary cards */}
           <div style={{ display:"grid", gridTemplateColumns:mob?"1fr 1fr":"repeat(4, 1fr)", gap:mob?10:14, marginBottom:mob?16:20, alignItems:"stretch" }}>
-            <StatCard icon="users" label="Level 1 Referrals" value={(u.l1||[]).length} sub={activeL1+" active"} />
+            <StatCard icon="users" label="Level 1 Referrals" value={(u.l1||[]).length} sub={networkActiveL1+" active"} />
             <StatCard icon="link" label="Level 2 Referrals" value={(u.l2||[]).length} sub={"via "+new Set((u.l2||[]).map(function(r){return r.from})).size+" referrers"} />
             <StatCard icon="chart" label="Total Network Size" value={(u.l1||[]).length + (u.l2||[]).length} />
             <StatCard icon="dollar" label="Total Network Revenue" value={"AED "+((u.l1||[]).reduce(function(s,r){return s+r.earned},0)+(u.l2||[]).reduce(function(s,r){return s+r.earned},0)).toFixed(2)} />
@@ -632,7 +641,7 @@ function UserPortal(props) {
               <div style={{ display:"flex", alignItems:"center", gap:20 }}>
                 <ResponsiveContainer width="50%" height={180}>
                   <PieChart>
-                    <Pie data={[{name:"L1 Active",value:activeL1},{name:"L1 Cancelled",value:(u.l1||[]).length-activeL1},{name:"Level 2",value:(u.l2||[]).length}]} cx="50%" cy="50%" innerRadius={32} outerRadius={55} paddingAngle={3} dataKey="value">
+                    <Pie data={analyticsView.networkBreakdown} cx="50%" cy="50%" innerRadius={32} outerRadius={55} paddingAngle={3} dataKey="value">
                       <Cell fill="rgb(0,228,193)" />
                       <Cell fill="rgba(248,113,113,0.35)" />
                       <Cell fill="rgba(167,139,250,0.6)" />
@@ -641,11 +650,11 @@ function UserPortal(props) {
                   </PieChart>
                 </ResponsiveContainer>
                 <div>
-                  {[{c:"rgb(0,228,193)",l:"Level 1 Active",v:activeL1},{c:"rgba(248,113,113,0.6)",l:"Level 1 Cancelled",v:(u.l1||[]).length-activeL1},{c:"rgba(167,139,250,0.7)",l:"Level 2",v:(u.l2||[]).length}].map(function(d){return (
-                    <div key={d.l} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-                      <div style={{ width:10, height:10, borderRadius:2, background:d.c, flexShrink:0 }} />
-                      <span style={{ fontSize:11, color:"#94a3b8" }}>{d.l}</span>
-                      <span style={{ fontSize:11, fontWeight:600, color:"#ffffff", marginLeft:"auto", padding:"1px 8px", borderRadius:5, background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)" }}>{d.v}</span>
+                  {analyticsView.networkBreakdown.map(function(d,i){var colors=["rgb(0,228,193)","rgba(248,113,113,0.6)","rgba(167,139,250,0.7)"];return (
+                    <div key={d.name} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                      <div style={{ width:10, height:10, borderRadius:2, background:colors[i], flexShrink:0 }} />
+                      <span style={{ fontSize:11, color:"#94a3b8" }}>{d.name}</span>
+                      <span style={{ fontSize:11, fontWeight:600, color:"#ffffff", marginLeft:"auto", padding:"1px 8px", borderRadius:5, background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.06)" }}>{d.value}</span>
                     </div>
                   )})}
                 </div>
@@ -655,16 +664,7 @@ function UserPortal(props) {
             <div style={{ background:"linear-gradient(180deg, rgba(19,19,21,1) 0%, rgba(14,14,16,1) 100%)", borderRadius:16, padding:mob?14:24, border:"1px solid rgba(0,228,193,0.06)", boxShadow:"0 4px 24px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04)", boxSizing:"border-box" }}>
               <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 14px", color:"#ffffff" }}>Referral Growth Over Time</h3>
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={(function(){
-                  var months = {};
-                  u.l1.concat(u.l2).forEach(function(r){
-                    var m = r.date.split(" ").slice(0,1).join(" ");
-                    if (!months[m]) months[m] = {month:m, l1:0, l2:0};
-                    if (u.l1.indexOf(r) >= 0) months[m].l1 += 1;
-                    else months[m].l2 += 1;
-                  });
-                  return Object.values(months);
-                })()} margin={{top:5,right:5,left:mob?-25:-10,bottom:5}}>
+                <BarChart data={analyticsView.referralGrowth} margin={{top:5,right:5,left:mob?-25:-10,bottom:5}}>
                   <CartesianGrid strokeDasharray="4 6" stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} vertical={false} />
                   <XAxis dataKey="month" tick={{fill:"#64748b",fontSize:10}} axisLine={false} tickLine={false} />
                   <YAxis tick={{fill:"#64748b",fontSize:10}} axisLine={false} tickLine={false} allowDecimals={false} />
@@ -678,14 +678,14 @@ function UserPortal(props) {
           </div>
 
           <div style={{ background:"#0d0d0d", borderRadius:14, padding:mob?14:22, border:"1px solid rgba(255,255,255,0.06)", marginBottom:16, boxSizing:"border-box" }}>
-            <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 14px", color:"#ffffff" }}>{"Level 1 - Direct (40% = AED "+(PRICE*L1_RATE).toFixed(2)+" each)"}</h3>
+            <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 14px", color:"#ffffff" }}>{"Level 1 - Direct ("+(projection.l1_commission_rate*100).toFixed(0)+"% = AED "+(projection.subscription_price_aed*projection.l1_commission_rate).toFixed(2)+" each)"}</h3>
             <table style={{ width:"100%", borderCollapse:"collapse" }}>
               <thead><tr>{["Name","Joined","Status","Earned"].map(function(h){return <th key={h} style={{ padding:"8px 10px", fontSize:10, fontWeight:700, textTransform:"uppercase", color:"#64748b", textAlign:"left", borderBottom:"2px solid rgba(255,255,255,0.08)" }}>{h}</th>})}</tr></thead>
               <tbody>{(u.l1||[]).map(function(r){return <tr key={r.name} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)" }}><td style={{ padding:"10px", fontSize:13, fontWeight:600, color:"#ffffff" }}>{r.name}</td><td style={{ padding:"10px", fontSize:12, color:"#64748b" }}>{r.date}</td><td style={{ padding:"10px" }}><Badge s={r.status}/></td><td style={{ padding:"10px", fontSize:13, fontWeight:500, color:"#ffffff" }}>{"AED "+r.earned.toFixed(2)}</td></tr>})}</tbody>
             </table>
           </div>
           <div style={{ background:"#0d0d0d", borderRadius:14, padding:mob?14:22, border:"1px solid rgba(255,255,255,0.06)", boxSizing:"border-box" }}>
-            <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 14px", color:"#ffffff" }}>{"Level 2 - Indirect (5% = AED "+(PRICE*L2_RATE).toFixed(2)+" each)"}</h3>
+            <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 14px", color:"#ffffff" }}>{"Level 2 - Indirect ("+(projection.l2_commission_rate*100).toFixed(0)+"% = AED "+(projection.subscription_price_aed*projection.l2_commission_rate).toFixed(2)+" each)"}</h3>
             <table style={{ width:"100%", borderCollapse:"collapse" }}>
               <thead><tr>{["Name","Via","Joined","Earned"].map(function(h){return <th key={h} style={{ padding:"8px 10px", fontSize:10, fontWeight:700, textTransform:"uppercase", color:"#64748b", textAlign:"left", borderBottom:"2px solid rgba(255,255,255,0.08)" }}>{h}</th>})}</tr></thead>
               <tbody>{(u.l2||[]).map(function(r){return <tr key={r.name} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)" }}><td style={{ padding:"10px", fontSize:13, fontWeight:600, color:"#ffffff" }}>{r.name}</td><td style={{ padding:"10px", fontSize:12, color:"#ffffff" }}>{r.from}</td><td style={{ padding:"10px", fontSize:12, color:"#64748b" }}>{r.date}</td><td style={{ padding:"10px", fontSize:13, fontWeight:500, color:"#a78bfa" }}>{"AED "+r.earned.toFixed(2)}</td></tr>})}</tbody>
@@ -696,10 +696,10 @@ function UserPortal(props) {
         {tab === "earnings" && <div>
           <h2 style={{ fontSize:22, fontWeight:700, margin:"0 0 20px", color:"#ffffff" }}>Earnings</h2>
           <div style={{ display:"grid", gridTemplateColumns:mob?"1fr 1fr":"repeat(4, 1fr)", gap:mob?10:14, marginBottom:mob?16:20, alignItems:"stretch" }}>
-            <StatCard icon="dollar" label="Total Earnings" value={"AED "+u.earn.total} />
-            <StatCard icon="chart" label="This Month's Earnings" value={"AED "+u.earn.month} />
-            <StatCard icon="refresh" label="Pending Payout" value={"AED "+u.earn.pending} color="#00e4c1" />
-            <StatCard icon="shield" label="Total Paid Out" value={"AED "+u.earn.paid} />
+            <StatCard icon="dollar" label="Total Earnings" value={"AED "+displayedEarnings.total} />
+            <StatCard icon="chart" label="This Month's Earnings" value={"AED "+displayedEarnings.month} />
+            <StatCard icon="refresh" label="Pending Payout" value={"AED "+displayedEarnings.pending} color="#00e4c1" />
+            <StatCard icon="shield" label="Total Paid Out" value={"AED "+displayedEarnings.paid} />
           </div>
           <div style={{ background:"linear-gradient(180deg, rgba(19,19,21,1) 0%, rgba(14,14,16,1) 100%)", borderRadius:16, padding:mob?14:24, border:"1px solid rgba(0,228,193,0.06)", boxShadow:"0 4px 24px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04)", boxSizing:"border-box", marginBottom:16 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
@@ -712,7 +712,7 @@ function UserPortal(props) {
             </div>
             <p style={{ fontSize:11, color:"#64748b", margin:"0 0 16px" }}>Weekly commission breakdown — Level 1 direct, Level 2 indirect, and net profit</p>
             <ResponsiveContainer width="100%" height={300}>
-              <AreaChart data={(function(){ var h=u.earningsHistory||[]; return chartRange==="4w"?h.slice(-4):chartRange==="3m"?h.slice(-12):h; })()} margin={{top:5,right:5,left:mob?-25:-10,bottom:5}}>
+              <AreaChart data={selectedEarningsSeries} margin={{top:5,right:5,left:mob?-25:-10,bottom:5}}>
                 <defs>
                   <linearGradient id="uL1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="rgb(0,228,193)" stopOpacity={0.45}/><stop offset="50%" stopColor="rgb(0,228,193)" stopOpacity={0.15}/><stop offset="100%" stopColor="rgb(0,228,193)" stopOpacity={0}/></linearGradient>
                   <linearGradient id="uL2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#a78bfa" stopOpacity={0.4}/><stop offset="50%" stopColor="#7c3aed" stopOpacity={0.12}/><stop offset="100%" stopColor="#7c3aed" stopOpacity={0}/></linearGradient>
@@ -732,16 +732,16 @@ function UserPortal(props) {
             <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 16px", color:"#ffffff" }}>Monthly Earnings Breakdown</h3>
             <div style={{ display:"grid", gridTemplateColumns:mob?"1fr":"1fr 1fr 1fr", gap:mob?10:14, alignItems:"stretch" }}>
               <div style={{ background:"rgba(0,228,193,0.1)", borderRadius:12, padding:18, textAlign:"center", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
-                <div style={{ fontSize:10, fontWeight:700, color:"rgb(0,228,193)", marginBottom:6, letterSpacing:0.5, textTransform:"uppercase" }}>Level 1 (40%)</div>
-                <div style={{ fontSize:18, fontWeight:500, color:"rgb(0,228,193)" }}>{"AED "+(activeL1*PRICE*L1_RATE).toFixed(2)}</div>
+                <div style={{ fontSize:10, fontWeight:700, color:"rgb(0,228,193)", marginBottom:6, letterSpacing:0.5, textTransform:"uppercase" }}>{"Level 1 ("+(projection.l1_commission_rate*100).toFixed(0)+"%)"}</div>
+                <div style={{ fontSize:18, fontWeight:500, color:"rgb(0,228,193)" }}>{"AED "+projection.projected_l1_aed.toFixed(2)}</div>
               </div>
               <div style={{ background:"rgba(167,139,250,0.08)", borderRadius:12, padding:18, textAlign:"center", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
-                <div style={{ fontSize:10, fontWeight:700, color:"#a78bfa", marginBottom:6, letterSpacing:0.5, textTransform:"uppercase" }}>Level 2 (5%)</div>
-                <div style={{ fontSize:18, fontWeight:500, color:"#a78bfa" }}>{"AED "+((u.l2||[]).length*PRICE*L2_RATE).toFixed(2)}</div>
+                <div style={{ fontSize:10, fontWeight:700, color:"#a78bfa", marginBottom:6, letterSpacing:0.5, textTransform:"uppercase" }}>{"Level 2 ("+(projection.l2_commission_rate*100).toFixed(0)+"%)"}</div>
+                <div style={{ fontSize:18, fontWeight:500, color:"#a78bfa" }}>{"AED "+projection.projected_l2_aed.toFixed(2)}</div>
               </div>
               <div style={{ background:"rgba(0,228,193,0.06)", borderRadius:12, padding:18, textAlign:"center", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
                 <div style={{ fontSize:10, fontWeight:700, color:"rgb(0,228,193)", marginBottom:6, letterSpacing:0.5, textTransform:"uppercase" }}>Net Monthly</div>
-                <div style={{ fontSize:18, fontWeight:500, color:"rgb(0,228,193)" }}>{"AED "+(activeL1*PRICE*L1_RATE + (u.l2||[]).length*PRICE*L2_RATE - PRICE).toFixed(2)}</div>
+                <div style={{ fontSize:18, fontWeight:500, color:"rgb(0,228,193)" }}>{"AED "+projection.projected_monthly_after_subscription_aed.toFixed(2)}</div>
               </div>
             </div>
           </div>
@@ -752,13 +752,7 @@ function UserPortal(props) {
               <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 4px", color:"#ffffff" }}>Total Earnings Over Time</h3>
               <p style={{ fontSize:11, color:"#64748b", margin:"0 0 16px" }}>Running total of all commissions earned since you joined</p>
               <ResponsiveContainer width="100%" height={240}>
-                <AreaChart margin={{top:5,right:5,left:mob?-25:-10,bottom:5}} data={(function(){
-                  var running = 0;
-                  return (u.earningsHistory||[]).map(function(w){
-                    running += w.l1 + w.l2;
-                    return {week:w.week, total:Math.round(running*100)/100};
-                  });
-                })()}>
+                <AreaChart margin={{top:5,right:5,left:mob?-25:-10,bottom:5}} data={analyticsView.cumulativeEarnings}>
                   <defs>
                     <linearGradient id="cumGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="rgb(0,228,193)" stopOpacity={0.4}/><stop offset="40%" stopColor="rgb(0,228,193)" stopOpacity={0.15}/><stop offset="100%" stopColor="rgb(0,228,193)" stopOpacity={0}/></linearGradient>
                   </defs>
@@ -775,24 +769,22 @@ function UserPortal(props) {
             <div style={{ background:"linear-gradient(180deg, rgba(19,19,21,1) 0%, rgba(14,14,16,1) 100%)", borderRadius:16, padding:mob?14:24, border:"1px solid rgba(0,228,193,0.06)", boxShadow:"0 4px 24px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04)", boxSizing:"border-box", display:"flex", flexDirection:"column" }}>
               <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 16px", color:"#ffffff" }}>Projected Annual Earnings</h3>
               {(function(){
-                var monthlyGross = activeL1 * PRICE * L1_RATE + (u.l2||[]).length * PRICE * L2_RATE;
-                var monthlyNet = monthlyGross - PRICE;
-                var annualNet = monthlyNet * 12;
+                var annualNet = projection.projected_annual_after_subscription_aed;
                 return (
                   <div style={{ flex:1, display:"flex", flexDirection:"column", justifyContent:"space-between" }}>
                     <div>
                       <div style={{ display:"inline-block", fontSize:9, fontWeight:700, color:"#64748b", marginBottom:8, padding:"3px 10px", borderRadius:5, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.05)", letterSpacing:0.8 }}>IF CURRENT RATE HOLDS</div>
                       <div style={{ fontSize:28, fontWeight:500, color:annualNet>=0?"rgb(0,228,193)":"#f87171", marginBottom:4 }}>{"AED "+annualNet.toFixed(2)}</div>
-                      <div style={{ display:"inline-block", fontSize:9, color:"#64748b", marginTop:4, padding:"2px 8px", borderRadius:4, background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.04)", letterSpacing:0.3 }}>{"net per year · " + activeL1 + " active L1 · " + (u.l2||[]).length + " L2"}</div>
+                      <div style={{ display:"inline-block", fontSize:9, color:"#64748b", marginTop:4, padding:"2px 8px", borderRadius:4, background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.04)", letterSpacing:0.3 }}>{"net per year · " + projection.active_l1 + " active L1 · " + projection.active_l2 + " L2"}</div>
                     </div>
                     <div style={{ borderTop:"1px solid rgba(255,255,255,0.04)", paddingTop:14, marginTop:14 }}>
                       <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
                         <span style={{ fontSize:10, color:"#64748b", padding:"1px 6px", borderRadius:4, background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.04)" }}>Gross annual</span>
-                        <span style={{ fontSize:11, fontWeight:600, color:"#ffffff" }}>{"AED "+(monthlyGross*12).toFixed(2)}</span>
+                        <span style={{ fontSize:11, fontWeight:600, color:"#ffffff" }}>{"AED "+projection.projected_annual_commissions_aed.toFixed(2)}</span>
                       </div>
                       <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
                         <span style={{ fontSize:10, color:"#64748b", padding:"1px 6px", borderRadius:4, background:"rgba(248,113,113,0.04)", border:"1px solid rgba(248,113,113,0.06)" }}>Subscription cost</span>
-                        <span style={{ fontSize:11, fontWeight:600, color:"#f87171" }}>{"-AED "+(PRICE*12).toFixed(2)}</span>
+                        <span style={{ fontSize:11, fontWeight:600, color:"#f87171" }}>{"-AED "+projection.projected_annual_subscription_aed.toFixed(2)}</span>
                       </div>
                       <div style={{ display:"flex", justifyContent:"space-between", paddingTop:6, borderTop:"1px solid rgba(255,255,255,0.04)" }}>
                         <span style={{ fontSize:10, fontWeight:600, color:"#94a3b8", padding:"1px 6px", borderRadius:4, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.05)" }}>Net annual</span>
@@ -810,11 +802,11 @@ function UserPortal(props) {
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:10 }}>
             <h2 style={{ fontSize:22, fontWeight:700, margin:0, color:"#ffffff" }}>Payouts</h2>
             <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", justifyContent:mob?"flex-start":"flex-end" }}>
-              <span style={{ fontSize:12, color:u.earn.pending >= 50 ? "#94a3b8" : "#64748b" }}>
-                {u.earn.pending >= 50 ? "AED "+u.earn.pending.toFixed(2)+" available" : "AED "+u.earn.pending.toFixed(2)+" available · AED "+Math.max(0, 50-u.earn.pending).toFixed(2)+" more needed"}
+              <span style={{ fontSize:12, color:availableForPayoutAed >= requestMinimumPayoutAed ? "#94a3b8" : "#64748b" }}>
+                {availableForPayoutAed >= requestMinimumPayoutAed ? "AED "+availableForPayoutAed.toFixed(2)+" available" : "AED "+availableForPayoutAed.toFixed(2)+" available · AED "+Math.max(0, requestMinimumPayoutAed-availableForPayoutAed).toFixed(2)+" more needed"}
               </span>
-              <span title={u.earn.pending >= 50 ? "Request your full available payout" : "Minimum payout is AED 50"} style={{ display:"inline-flex" }}>
-                <button disabled={u.earn.pending < 50} onClick={function(){ if (u.earn.pending < 50) return; setWithdrawError(""); setWithdrawOpen(true); }} style={{ padding:"9px 18px", borderRadius:10, border:"none", background:"rgb(0,228,193)", color:"#000000", fontSize:13, fontWeight:700, cursor:u.earn.pending >= 50?"pointer":"not-allowed", display:"flex", alignItems:"center", gap:6, opacity:u.earn.pending >= 50 ? 1 : 0.45 }}>
+              <span title={availableForPayoutAed >= requestMinimumPayoutAed ? "Request your full available payout" : "Minimum payout is AED "+requestMinimumPayoutAed.toFixed(2)} style={{ display:"inline-flex" }}>
+                <button disabled={availableForPayoutAed < requestMinimumPayoutAed} onClick={function(){ if (availableForPayoutAed < requestMinimumPayoutAed) return; setWithdrawError(""); setWithdrawOpen(true); }} style={{ padding:"9px 18px", borderRadius:10, border:"none", background:"rgb(0,228,193)", color:"#000000", fontSize:13, fontWeight:700, cursor:availableForPayoutAed >= requestMinimumPayoutAed?"pointer":"not-allowed", display:"flex", alignItems:"center", gap:6, opacity:availableForPayoutAed >= requestMinimumPayoutAed ? 1 : 0.45 }}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
                   Request payout
                 </button>
@@ -827,10 +819,10 @@ function UserPortal(props) {
             <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:16 }} onClick={function(e){if(e.target===e.currentTarget)setWithdrawOpen(false)}}>
               <div style={{ background:"#0d0d0d", border:"1px solid rgba(255,255,255,0.08)", borderRadius:16, padding:28, width:"100%", maxWidth:400 }}>
                 <div style={{ fontSize:18, fontWeight:700, color:"#ffffff", marginBottom:4 }}>Request payout</div>
-                <div style={{ fontSize:13, color:"#94a3b8", marginBottom:20 }}>{"AED "+u.earn.pending.toFixed(2)+" will be paid to your registered IBAN."}</div>
+                <div style={{ fontSize:13, color:"#94a3b8", marginBottom:20 }}>{"AED "+availableForPayoutAed.toFixed(2)+" will be paid to your registered IBAN."}</div>
                 <div style={{ marginBottom:16, padding:"14px 16px", borderRadius:10, border:"1px solid rgba(0,228,193,0.16)", background:"rgba(0,228,193,0.07)" }}>
                   <div style={{ fontSize:11, color:"#94a3b8", fontWeight:700, textTransform:"uppercase", letterSpacing:0.5, marginBottom:6 }}>Full available payout</div>
-                  <div style={{ fontSize:24, color:"#ffffff", fontWeight:700 }}>{"AED "+u.earn.pending.toFixed(2)}</div>
+                  <div style={{ fontSize:24, color:"#ffffff", fontWeight:700 }}>{"AED "+availableForPayoutAed.toFixed(2)}</div>
                 </div>
                 {withdrawError && <div style={{ fontSize:12, color:"#f87171", marginBottom:12, padding:"8px 12px", borderRadius:8, background:"rgba(248,113,113,0.08)", border:"1px solid rgba(248,113,113,0.15)" }}>{withdrawError}</div>}
                 <div style={{ fontSize:11, color:"#64748b", marginBottom:20, padding:"10px 12px", borderRadius:8, background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.04)" }}>
@@ -839,15 +831,15 @@ function UserPortal(props) {
                 </div>
                 <div style={{ display:"flex", gap:10 }}>
                   <button onClick={async function(){
-                    var amt = u.earn.pending;
-                    if (amt < 50) { setWithdrawError("Minimum withdrawal is AED 50"); return; }
+                    var amt = availableForPayoutAed;
+                    if (amt < requestMinimumPayoutAed) { setWithdrawError("Minimum withdrawal is AED "+requestMinimumPayoutAed.toFixed(2)); return; }
                     if (!u.iban || !u.ibanName) { setWithdrawError("Please add your IBAN and account holder name in Settings before requesting a payout"); return; }
                     setWithdrawLoading(true); setWithdrawError("");
                     try {
                       var payout = await payoutsApi.request();
                       var payoutAmount = payout && payout.amount_aed ? payout.amount_aed : amt;
                       setWithdrawOpen(false);
-                      setMyPayouts(function(prev){ return [{ created_at: new Date().toISOString(), amount_aed: payoutAmount, status:"requested" }].concat(prev); });
+                      setMyPayouts(function(prev){ return [{ id:payout && payout.id ? payout.id : "", created_at:payout && payout.created_at ? payout.created_at : new Date().toISOString(), paid_at:null, amount_aed:payoutAmount, status:"requested" }].concat(prev); });
                       // Optimistically mark commissions as approved so pending balance updates immediately
                       setMyCommissions(function(prev){
                         var updated = [];
@@ -858,6 +850,15 @@ function UserPortal(props) {
                           } else { updated.push(c); }
                         }
                         return updated;
+                      });
+                      setUserAnalytics(function(prev){
+                        if (!prev || !prev.financial_summary) return prev;
+                        return Object.assign({}, prev, {
+                          financial_summary: Object.assign({}, prev.financial_summary, {
+                            available_for_payout_aed: 0,
+                            in_requested_payout_aed: (prev.financial_summary.in_requested_payout_aed || 0) + payoutAmount,
+                          }),
+                        });
                       });
                     } catch(err){ setWithdrawError(err.message || "Request failed — please try again"); }
                     finally { setWithdrawLoading(false); }
@@ -872,8 +873,8 @@ function UserPortal(props) {
 
           {/* Payout summary cards */}
           <div style={{ display:"grid", gridTemplateColumns:mob?"1fr 1fr":"repeat(4, 1fr)", gap:mob?10:14, marginBottom:mob?16:20, alignItems:"stretch" }}>
-            <StatCard icon="bank" label="Total Paid Out" value={"AED "+u.earn.paid} />
-            <StatCard icon="refresh" label="Pending Payout" value={"AED "+u.earn.pending} />
+            <StatCard icon="bank" label="Total Paid Out" value={"AED "+displayedEarnings.paid} />
+            <StatCard icon="refresh" label="Pending Payout" value={"AED "+displayedEarnings.pending} />
             <StatCard icon="check" label="Total Payouts" value={(u.payouts||[]).length} />
             <StatCard icon="dollar" label="Avg Payout" value={(function(){ var done=(u.payouts||[]).filter(function(p){return p.status==="completed"||p.status==="paid"}); return "AED "+(done.length>0?(done.reduce(function(s,p){return s+p.amount},0)/done.length).toFixed(2):"0.00"); })()} />
           </div>
@@ -883,40 +884,54 @@ function UserPortal(props) {
             <div style={{ background:"#0d0d0d", borderRadius:14, padding:mob?14:22, border:"1px solid rgba(255,255,255,0.06)", boxSizing:"border-box" }}>
               <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 4px", color:"#ffffff" }}>Weekly Payout History</h3>
               <p style={{ fontSize:11, color:"#64748b", margin:"0 0 16px" }}>Requested and completed payout amounts</p>
-              <ResponsiveContainer width="100%" height={220}>
+              {(u.payouts||[]).length === 0 ? (
+                <div style={{ height:220, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, color:"#64748b", textAlign:"center" }}>
+                  <div style={{ width:34, height:34, borderRadius:9, background:"rgba(0,228,193,0.06)", border:"1px solid rgba(0,228,193,0.1)", display:"flex", alignItems:"center", justifyContent:"center", lineHeight:0 }}>
+                    <Ico name="bank" size={16} color="#64748b" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:600, color:"#94a3b8", marginBottom:3 }}>No payout history yet</div>
+                    <div style={{ fontSize:10 }}>Requested payouts will appear here.</div>
+                  </div>
+                </div>
+              ) : <ResponsiveContainer width="100%" height={220}>
                 <BarChart margin={{top:5,right:5,left:mob?-25:-10,bottom:5}} data={(u.payouts||[]).map(function(p){return {date:p.date,amount:p.amount,status:p.status}})}>
                   <CartesianGrid strokeDasharray="4 6" stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} vertical={false} />
                   <XAxis dataKey="date" tick={{fill:"#64748b",fontSize:9}} axisLine={false} tickLine={false} />
                   <YAxis tick={{fill:"#64748b",fontSize:10}} tickFormatter={function(v){return "AED "+v}} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={{background:"#0d0d0d",border:"1px solid rgba(0,228,193,0.2)",borderRadius:8,fontSize:12,color:"#ffffff"}} labelStyle={{color:"#ffffff",marginBottom:4}} itemStyle={{color:"#ffffff"}} formatter={function(v){return ["AED "+v.toFixed(2),"Amount"]}} />
-                  <Bar dataKey="amount" radius={[4,4,0,0]} name="Amount">
+                  <Tooltip cursor={{fill:"rgba(255,255,255,0.025)"}} contentStyle={{background:"#0d0d0d",border:"1px solid rgba(0,228,193,0.2)",borderRadius:8,fontSize:12,color:"#ffffff"}} labelStyle={{color:"#ffffff",marginBottom:4}} itemStyle={{color:"#ffffff"}} formatter={function(v){return ["AED "+v.toFixed(2),"Amount"]}} />
+                  <Bar dataKey="amount" radius={[4,4,0,0]} name="Amount" maxBarSize={56}>
                     {(u.payouts||[]).map(function(p,i){return <Cell key={i} fill={p.status==="completed"?"rgb(0,228,193)":p.status==="processing"?"rgba(0,228,193,0.5)":"rgba(248,113,113,0.4)"} />})}
                   </Bar>
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer>}
             </div>
 
             <div style={{ background:"linear-gradient(180deg, rgba(19,19,21,1) 0%, rgba(14,14,16,1) 100%)", borderRadius:16, padding:mob?14:24, border:"1px solid rgba(0,228,193,0.06)", boxShadow:"0 4px 24px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04)", boxSizing:"border-box" }}>
               <h3 style={{ fontSize:14, fontWeight:700, margin:"0 0 4px", color:"#ffffff" }}>Total Paid Over Time</h3>
               <p style={{ fontSize:11, color:"#64748b", margin:"0 0 16px" }}>Running total of all money transferred to your bank</p>
-              <ResponsiveContainer width="100%" height={220}>
-                <AreaChart margin={{top:5,right:5,left:mob?-25:-10,bottom:5}} data={(function(){
-                  var running = 0;
-                  return (u.payouts||[]).filter(function(p){return p.status==="completed"}).map(function(p){
-                    running += p.amount;
-                    return {date:p.date, total:Math.round(running*100)/100};
-                  });
-                })()}>
+              {analyticsView.cumulativePayouts.length === 0 ? (
+                <div style={{ height:220, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, color:"#64748b", textAlign:"center" }}>
+                  <div style={{ width:34, height:34, borderRadius:9, background:"rgba(0,228,193,0.06)", border:"1px solid rgba(0,228,193,0.1)", display:"flex", alignItems:"center", justifyContent:"center", lineHeight:0 }}>
+                    <Ico name="chart" size={16} color="#64748b" />
+                  </div>
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:600, color:"#94a3b8", marginBottom:3 }}>No completed payouts yet</div>
+                    <div style={{ fontSize:10 }}>Your paid-out total will appear after the first transfer.</div>
+                  </div>
+                </div>
+              ) : <ResponsiveContainer width="100%" height={220}>
+                <AreaChart margin={{top:5,right:5,left:mob?-25:-10,bottom:5}} data={analyticsView.cumulativePayouts}>
                   <defs>
                     <linearGradient id="payGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="rgb(0,228,193)" stopOpacity={0.4}/><stop offset="40%" stopColor="rgb(0,228,193)" stopOpacity={0.12}/><stop offset="100%" stopColor="rgb(0,228,193)" stopOpacity={0}/></linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="4 6" stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
                   <XAxis dataKey="date" tick={{fill:"#64748b",fontSize:9}} axisLine={false} tickLine={false} />
                   <YAxis tick={{fill:"#64748b",fontSize:10}} tickFormatter={function(v){return "AED "+v}} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={{background:"#0d0d0d",border:"1px solid rgba(0,228,193,0.2)",borderRadius:8,fontSize:12,color:"#ffffff"}} labelStyle={{color:"#ffffff",marginBottom:4}} itemStyle={{color:"#ffffff"}} formatter={function(v){return "AED "+v.toFixed(2)}} />
-                  <Area type="monotone" dataKey="total" stroke="rgb(0,228,193)" fill="url(#payGrad)" strokeWidth={2} name="Cumulative" />
+                  <Tooltip cursor={{stroke:"rgba(255,255,255,0.08)",strokeWidth:1}} contentStyle={{background:"#0d0d0d",border:"1px solid rgba(0,228,193,0.2)",borderRadius:8,fontSize:12,color:"#ffffff"}} labelStyle={{color:"#ffffff",marginBottom:4}} itemStyle={{color:"#ffffff"}} formatter={function(v){return "AED "+v.toFixed(2)}} />
+                  <Area type="monotone" dataKey="total" stroke="rgb(0,228,193)" fill="url(#payGrad)" strokeWidth={2} dot={{fill:"rgb(0,228,193)",r:3}} activeDot={{fill:"rgb(0,228,193)",r:5,stroke:"rgba(0,228,193,0.3)",strokeWidth:6}} name="Cumulative" />
                 </AreaChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer>}
             </div>
           </div>
 

@@ -74,26 +74,8 @@ var GROWTH_DATA = [
   {date:"Mar 1",users:86,active:72,cancelled:14,signups:4,revenue:6840,commissions:2736,payouts:2586,profit:4104},
 ];
 
-var REFERRAL_LEADERS = [
-  {name:"David Chen",l1:12,l2:34,total:46,earned:4056,conv:78},
-  {name:"Aisha Khan",l1:8,l2:15,total:23,earned:2508,conv:72},
-  {name:"Carlos Reyes",l1:5,l2:8,total:13,earned:1430,conv:65},
-  {name:"Maria Lopez",l1:4,l2:6,total:10,earned:1031,conv:80},
-  {name:"Priya Sharma",l1:3,l2:2,total:5,earned:684,conv:60},
-];
-
-var NETWORK_PIE = [
-  {name:"Level 1 Direct",value:36,color:"#d4d4d8"},
-  {name:"Level 2 Indirect",value:65,color:"#a78bfa"},
-  {name:"No Referrer",value:21,color:"#a1a1aa"},
-];
-
 var CHURN_DATA = [
   {month:"Oct",rate:8.2},{month:"Nov",rate:9.1},{month:"Dec",rate:7.5},{month:"Jan",rate:6.8},{month:"Feb",rate:5.4},{month:"Mar",rate:4.9},
 ];
 
-var MONTHLY_PAYOUTS = [
-  {month:"Oct",amount:3926},{month:"Nov",amount:5506},{month:"Dec",amount:7086},{month:"Jan",amount:9048},{month:"Feb",amount:11203},{month:"Mar",amount:2586},
-];
-
-export { PRICE, L1_RATE, L2_RATE, INIT_COURSES, USER, adminUsers, INIT_PAYOUTS, GROWTH_DATA, NETWORK_PIE, CHURN_DATA, MONTHLY_PAYOUTS };
+export { PRICE, L1_RATE, L2_RATE, INIT_COURSES, USER, adminUsers, INIT_PAYOUTS, GROWTH_DATA, CHURN_DATA };
